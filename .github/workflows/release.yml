@@ -8,6 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
   create-release:
     name: Create Release
@@ -16,37 +19,35 @@ jobs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
+    - uses: actions/checkout@v4
+    
     - name: Get version from tag
       id: get_version
       run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ steps.get_version.outputs.version }}
-        draft: false
-        prerelease: false
-        body: |
-          ## Changes
+      run: |
+        gh release create ${{ github.ref_name }} \
+          --title "Release ${{ steps.get_version.outputs.version }}" \
+          --notes "## Changes
           
           See [CHANGELOG.md](https://github.com/fireboy1919/mise-s3-cache/blob/main/CHANGELOG.md) for details.
           
           ## Installation
           
           ### Using cargo
-          ```bash
+          \`\`\`bash
           cargo install mise-s3-cache
-          ```
+          \`\`\`
           
           ### Download binary
           Download the appropriate binary for your platform from the assets below.
           
           ### Checksums
-          SHA256 checksums are provided for all binaries.
+          SHA256 checksums are provided for all binaries."
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-release:
     name: Build Release
@@ -137,25 +138,13 @@ jobs:
           shasum -a 256 "${ASSET}" > "${ASSET}.sha256"
         fi
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
+    - name: Upload Release Assets
+      run: |
+        gh release upload ${{ needs.create-release.outputs.version }} \
+          "${{ env.ASSET }}" \
+          "${{ env.ASSET }}.sha256"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./${{ env.ASSET }}
-        asset_name: ${{ env.ASSET }}
-        asset_content_type: application/octet-stream
-
-    - name: Upload Release Checksum
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./${{ env.ASSET }}.sha256
-        asset_name: ${{ env.ASSET }}.sha256
-        asset_content_type: text/plain
 
   publish-crate:
     name: Publish to crates.io
