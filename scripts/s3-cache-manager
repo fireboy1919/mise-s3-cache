@@ -1,0 +1,145 @@
+#!/bin/bash
+# Main S3 cache management CLI
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+
+source "$LIB_DIR/config.sh"
+source "$LIB_DIR/s3-cache.sh"
+source "$LIB_DIR/tool-detection.sh"
+source "$LIB_DIR/utils.sh"
+
+show_help() {
+    cat << 'EOF'
+mise S3 Cache Manager
+
+Usage: s3-cache-manager <command> [options]
+
+Commands:
+    status              Show S3 cache configuration and status
+    analyze             Analyze current project's cache status
+    warm                Pre-cache all tools in current project
+    stats               Show cache hit/miss statistics
+    cleanup [days]      Remove cache entries older than N days (default: 7)
+    test                Test S3 connectivity and permissions
+    help                Show this help message
+
+Configuration:
+    MISE_S3_CACHE_BUCKET        S3 bucket name (required)
+    MISE_S3_CACHE_REGION        AWS region (default: us-east-1)
+    MISE_S3_CACHE_PREFIX        S3 key prefix (default: mise-cache)
+    MISE_S3_CACHE_ENABLED       Enable/disable caching (default: true)
+    MISE_S3_CACHE_DEBUG         Enable debug logging (default: false)
+
+Examples:
+    s3-cache-manager status
+    s3-cache-manager warm
+    s3-cache-manager stats
+    s3-cache-manager cleanup 14
+EOF
+}
+
+show_cache_stats() {
+    local stats_file=$(get_cache_stats_file)
+    
+    if [[ ! -f "$stats_file" ]]; then
+        echo "📊 No cache statistics available yet"
+        echo "Install some tools to start tracking cache performance"
+        return 0
+    fi
+    
+    echo "📊 S3 Cache Statistics"
+    echo "====================="
+    
+    if command -v jq >/dev/null 2>&1; then
+        local total_hits=$(jq -r '.cache_hits // 0' "$stats_file")
+        local total_misses=$(jq -r '.cache_misses // 0' "$stats_file")
+        local total_downloads=$(jq -r '.total_downloads // 0' "$stats_file")
+        local total_savings=$(jq -r '.total_savings_bytes // 0' "$stats_file")
+        
+        if [[ $total_downloads -gt 0 ]]; then
+            local hit_rate=$(( (total_hits * 100) / total_downloads ))
+            echo "Cache hit rate: ${hit_rate}% (${total_hits}/${total_downloads})"
+            echo "Total bandwidth saved: $(human_readable_size "$total_savings")"
+        else
+            echo "No downloads tracked yet"
+        fi
+        
+        echo ""
+        echo "🔧 Most cached tools:"
+        jq -r '.tools | to_entries[] | "\(.key): \(.value | to_entries | length) versions"' "$stats_file" 2>/dev/null | head -10
+        
+        echo ""
+        echo "⏱️  Recent cache activity:"
+        jq -r '.tools | to_entries[] | .key as $tool | .value | to_entries[] | 
+            select(.value.last_used or .value.last_missed) | 
+            "\($tool)@\(.key): \(.value.last_used // .value.last_missed)"' "$stats_file" 2>/dev/null | tail -5
+    else
+        echo "Install 'jq' for detailed statistics"
+        echo ""
+        echo "Recent activity:"
+        tail -10 "${stats_file}.log" 2>/dev/null || echo "No activity logged yet"
+    fi
+}
+
+main() {
+    case "${1:-help}" in
+        "status")
+            show_config
+            ;;
+        "analyze")
+            analyze_project_cache
+            ;;
+        "warm")
+            warm_project_cache
+            ;;
+        "stats")
+            show_cache_stats
+            ;;
+        "cleanup")
+            cleanup_old_cache "${2:-7}"
+            ;;
+        "test")
+            echo "🧪 Testing S3 cache configuration..."
+            echo ""
+            
+            if validate_s3_config; then
+                echo "✅ S3 configuration valid"
+                
+                if test_s3_access; then
+                    echo "✅ S3 read/write access working"
+                    
+                    # Test with a small file
+                    local test_key="$S3_CACHE_PREFIX/test-$(date +%s)"
+                    local test_content="mise-s3-cache test file - safe to delete"
+                    
+                    if echo "$test_content" | aws s3 cp - "s3://$S3_CACHE_BUCKET/$test_key" --region "$S3_CACHE_REGION" --quiet 2>/dev/null; then
+                        aws s3 rm "s3://$S3_CACHE_BUCKET/$test_key" --region "$S3_CACHE_REGION" --quiet 2>/dev/null
+                        echo "✅ End-to-end S3 operations working"
+                    else
+                        echo "❌ S3 upload test failed"
+                    fi
+                else
+                    echo "❌ S3 access failed"
+                fi
+            else
+                echo "❌ S3 configuration invalid"
+            fi
+            
+            echo ""
+            echo "🔧 System information:"
+            echo "AWS CLI version: $(get_aws_cli_version)"
+            echo "Mise version: $(mise version 2>/dev/null || echo "not found")"
+            echo "Project root: $(get_project_root)"
+            echo "Is mise project: $(is_mise_project && echo "yes" || echo "no")"
+            echo "CI environment: $(is_ci_environment && echo "yes" || echo "no")"
+            ;;
+        "help"|*)
+            show_help
+            ;;
+    esac
+}
+
+main "$@"

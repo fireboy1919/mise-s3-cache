@@ -1,0 +1,9 @@
+# Test project configuration
+[tools]
+# Use specific versions that are likely to be available  
+deno = "1.40.0"
+
+[hooks]
+preinstall = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache restore --hook-mode --all"
+postinstall = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache store --hook-mode --all"
+enter = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache warm --hook-mode --background"

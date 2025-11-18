@@ -1,0 +1,16 @@
+# Configuration for the mise-s3-cache plugin itself
+
+[tasks]
+"s3-cache:status" = "scripts/s3-cache-manager status"
+"s3-cache:analyze" = "scripts/s3-cache-manager analyze"
+"s3-cache:warm" = "scripts/s3-cache-manager warm"
+"s3-cache:stats" = "scripts/s3-cache-manager stats"
+"s3-cache:cleanup" = "scripts/s3-cache-manager cleanup"
+"s3-cache:test" = "scripts/s3-cache-manager test"
+
+[env]
+MISE_S3_CACHE_DEBUG = "false"
+[hooks]
+preinstall = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache restore --hook-mode --all"
+postinstall = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache store --hook-mode --all"
+enter = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache warm --hook-mode --background"

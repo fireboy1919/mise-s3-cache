@@ -1,0 +1,7 @@
+# Fresh test configuration
+[tools]
+deno = "1.40.0"
+
+[hooks] 
+preinstall = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache restore --hook-mode --all"
+postinstall = "/home/rustyphillips/projects/fe/mise-s3-cache/target/debug/s3-cache store --hook-mode --all"

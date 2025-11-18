@@ -1,0 +1,60 @@
+#!/bin/bash
+# Post-install hook - store successful installs in S3 cache
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+
+source "$LIB_DIR/config.sh"
+source "$LIB_DIR/s3-cache.sh"
+source "$LIB_DIR/tool-detection.sh"
+
+main() {
+    local tool="$1"
+    local version="$2"
+    local install_path="$3"
+    
+    # Validate inputs
+    if [[ -z "$tool" || -z "$version" || -z "$install_path" ]]; then
+        exit 0  # Skip if missing parameters
+    fi
+    
+    # Skip if already restored from cache
+    if [[ -f "$install_path/.s3-cache-marker" ]]; then
+        log_debug "Tool ${tool}@${version} was restored from cache, skipping store"
+        exit 0
+    fi
+    
+    # Skip if S3 cache is not configured
+    if ! validate_s3_config; then
+        exit 0
+    fi
+    
+    # Only cache tools that are in the project configuration
+    if ! is_tool_in_project "$tool" "$version"; then
+        log_debug "Tool ${tool}@${version} not in project config, skipping S3 cache store"
+        exit 0
+    fi
+    
+    # Verify the installation was successful
+    if [[ ! -d "$install_path" ]]; then
+        log_debug "Install path $install_path does not exist, skipping cache store"
+        exit 0
+    fi
+    
+    # Check if already in cache to avoid unnecessary uploads
+    if check_s3_cache "$tool" "$version"; then
+        log_debug "Tool ${tool}@${version} already in S3 cache"
+        exit 0
+    fi
+    
+    log_debug "Storing ${tool}@${version} in S3 cache"
+    
+    # Store in S3 cache (this runs in background via &)
+    store_in_s3_cache "$tool" "$version" "$install_path"
+    
+    exit 0
+}
+
+main "$@"

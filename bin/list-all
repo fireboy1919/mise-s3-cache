@@ -1,0 +1,5 @@
+#!/bin/bash
+# List available versions for s3-cache plugin
+
+# This plugin only has one version since it's a utility
+echo "latest"

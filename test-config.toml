@@ -1,0 +1,12 @@
+# Test configuration for mise-s3-cache with MinIO
+enabled = true
+bucket = "mise-cache-test"
+region = "us-east-1"
+prefix = "test-cache"
+ttl_seconds = 3600
+parallel_uploads = 2
+compression = true
+debug = true
+
+# MinIO endpoint (will be set via environment variable)
+# endpoint = "http://localhost:9000"

@@ -1,0 +1,67 @@
+#!/bin/bash
+# Pre-install hook - check S3 cache before downloading
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+
+source "$LIB_DIR/config.sh"
+source "$LIB_DIR/s3-cache.sh"
+source "$LIB_DIR/tool-detection.sh"
+
+main() {
+    local tool="$1"
+    local version="$2"
+    
+    # Validate inputs
+    if [[ -z "$tool" || -z "$version" ]]; then
+        exit 0  # Skip if no tool/version provided
+    fi
+    
+    # Skip if S3 cache is not configured
+    if ! validate_s3_config; then
+        exit 0
+    fi
+    
+    # Only process tools that are in the project configuration
+    if ! is_tool_in_project "$tool" "$version"; then
+        log_debug "Tool ${tool}@${version} not in project config, skipping S3 cache"
+        exit 0
+    fi
+    
+    log_debug "Checking S3 cache for ${tool}@${version}"
+    
+    # Check if tool is in S3 cache
+    if check_s3_cache "$tool" "$version"; then
+        # Try to restore from cache
+        local install_path=$(get_tool_install_dir "$tool" "$version")
+        
+        if [[ -n "$install_path" ]]; then
+            # Create parent directory
+            mkdir -p "$(dirname "$install_path")"
+            
+            if restore_from_s3_cache "$tool" "$version" "$install_path"; then
+                # Cache hit - set environment variable to skip normal installation
+                export MISE_S3_CACHE_HIT="true"
+                
+                # Create a marker file to indicate cache was used
+                echo "restored_from_s3_cache_at_$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$install_path/.s3-cache-marker"
+                
+                log_success "✅ ${tool}@${version} restored from S3 cache"
+                exit 0
+            else
+                log_warn "⚠️  S3 cache restore failed for ${tool}@${version}, will download normally"
+                update_cache_stats "$tool" "$version" "false" "0" "restore_failed"
+            fi
+        fi
+    else
+        log_debug "❌ ${tool}@${version} not found in S3 cache"
+        update_cache_stats "$tool" "$version" "false" "0" "not_found"
+    fi
+    
+    # Not in cache or restore failed - let mise proceed normally
+    exit 0
+}
+
+main "$@"
