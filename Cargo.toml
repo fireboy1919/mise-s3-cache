@@ -1,6 +1,6 @@
 [package]
 name = "mise-s3-cache"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Rusty Phillips <rusty.phillips@gmail.com>"]
 description = "Intelligent S3 caching for mise tool installations"

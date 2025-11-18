@@ -7,6 +7,9 @@ use std::path::Path;
 use tokio::fs;
 use tracing::{debug, error, info};
 use uuid::Uuid;
+use futures::future::try_join_all;
+use futures::TryStreamExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::config::Config;
 // use crate::utils;
@@ -130,6 +133,78 @@ impl S3Client {
             local_path.display()
         );
 
+        // Get file size first
+        let file_size = self.get_object_size(s3_key).await?;
+        
+        // For small files (< 16MB), use simple download
+        const CHUNK_SIZE: u64 = 16 * 1024 * 1024; // 16MB chunks
+        const MIN_SIZE_FOR_CONCURRENT: u64 = CHUNK_SIZE;
+        
+        if file_size < MIN_SIZE_FOR_CONCURRENT {
+            return self.download_file_simple(s3_key, local_path).await;
+        }
+
+        debug!(
+            "Large file detected ({} bytes), using concurrent chunk download",
+            file_size
+        );
+
+        // Ensure parent directory exists
+        if let Some(parent) = local_path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        // Create file with correct size
+        let file = fs::File::create(local_path)
+            .await
+            .with_context(|| format!("Failed to create file: {}", local_path.display()))?;
+        
+        file.set_len(file_size)
+            .await
+            .with_context(|| "Failed to set file size")?;
+
+        // Calculate chunks
+        let num_chunks = (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let max_concurrent = std::cmp::min(8, num_chunks); // Max 8 concurrent downloads
+        
+        debug!("Downloading {} chunks concurrently (max {})", num_chunks, max_concurrent);
+
+        // Create download tasks
+        let mut tasks = Vec::new();
+        for chunk_idx in 0..num_chunks {
+            let start = chunk_idx * CHUNK_SIZE;
+            let end = std::cmp::min(start + CHUNK_SIZE - 1, file_size - 1);
+            
+            let client = self.client.clone();
+            let bucket = self.config.bucket.clone();
+            let key = s3_key.to_string();
+            let path = local_path.to_path_buf();
+            
+            tasks.push(tokio::spawn(async move {
+                Self::download_chunk(client, &bucket, &key, &path, start, end, chunk_idx).await
+            }));
+            
+            // Limit concurrent downloads
+            if tasks.len() >= max_concurrent as usize {
+                let results: Result<Vec<_>, _> = try_join_all(tasks.drain(..)).await;
+                results.with_context(|| "Failed to join download tasks")?;
+            }
+        }
+
+        // Wait for remaining tasks
+        if !tasks.is_empty() {
+            let results: Result<Vec<_>, _> = try_join_all(tasks).await;
+            results.with_context(|| "Failed to join remaining download tasks")?;
+        }
+
+        debug!("✅ Downloaded {} using concurrent chunks", local_path.display());
+        Ok(())
+    }
+
+    // Fallback method for small files or when concurrent download fails
+    async fn download_file_simple(&self, s3_key: &str, local_path: &Path) -> Result<()> {
         let response = self
             .client
             .get_object()
@@ -152,8 +227,6 @@ impl S3Client {
             .await
             .with_context(|| format!("Failed to create file: {}", local_path.display()))?;
 
-        use tokio::io::AsyncWriteExt;
-        // use futures::TryStreamExt;
         while let Some(chunk) = body
             .try_next()
             .await
@@ -168,7 +241,60 @@ impl S3Client {
             .await
             .with_context(|| "Failed to sync file to disk")?;
 
-        debug!("✅ Downloaded {}", local_path.display());
+        Ok(())
+    }
+
+    // Download a specific byte range of the file
+    async fn download_chunk(
+        client: Client,
+        bucket: &str,
+        s3_key: &str,
+        local_path: &Path,
+        start: u64,
+        end: u64,
+        chunk_idx: u64,
+    ) -> Result<()> {
+        let range = format!("bytes={}-{}", start, end);
+        
+        debug!("Downloading chunk {} ({})", chunk_idx, range);
+        
+        let response = client
+            .get_object()
+            .bucket(bucket)
+            .key(s3_key)
+            .range(&range)
+            .send()
+            .await
+            .with_context(|| format!("Failed to download chunk {} with range {}", chunk_idx, range))?;
+
+        // Read chunk data into memory
+        let mut chunk_data = Vec::new();
+        let mut body = response.body;
+        
+        while let Some(data) = body
+            .try_next()
+            .await
+            .with_context(|| format!("Failed to read chunk {} data", chunk_idx))?
+        {
+            chunk_data.extend_from_slice(&data);
+        }
+
+        // Write chunk to correct position in file
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .open(local_path)
+            .await
+            .with_context(|| format!("Failed to open file for chunk {}", chunk_idx))?;
+
+        file.seek(std::io::SeekFrom::Start(start))
+            .await
+            .with_context(|| format!("Failed to seek to position {} for chunk {}", start, chunk_idx))?;
+
+        file.write_all(&chunk_data)
+            .await
+            .with_context(|| format!("Failed to write chunk {} data", chunk_idx))?;
+
+        debug!("✅ Completed chunk {} ({} bytes)", chunk_idx, chunk_data.len());
         Ok(())
     }
 
