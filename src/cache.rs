@@ -78,6 +78,21 @@ impl CacheManager {
         self.s3_client.object_exists(&metadata_key).await
     }
 
+    /// Restore tool from cache using standard mise install path
+    pub async fn restore_tool_from_cache(&self, tool: &str, version: &str) -> Result<bool> {
+        // Get the standard mise install path for this tool
+        let install_path = match self.get_tool_install_path(tool, version).await {
+            Ok(path) => path.to_string_lossy().to_string(),
+            Err(_) => {
+                // If we can't get the path, use the standard mise pattern
+                let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+                format!("{}/.local/share/mise/installs/{}/{}", home.display(), tool, version)
+            }
+        };
+        
+        self.restore_from_cache(tool, version, &install_path).await
+    }
+
     pub async fn restore_from_cache(
         &self,
         tool: &str,

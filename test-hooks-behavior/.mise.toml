@@ -1,0 +1,18 @@
+[tools]
+jq = "1.6"
+
+[hooks]
+preinstall = '''
+echo "🔵 PREINSTALL HOOK: Creating fake jq installation in expected location"
+# Create the expected installation directory structure
+mkdir -p "$HOME/.local/share/mise/installs/jq/1.6/bin"
+echo "#!/bin/bash" > "$HOME/.local/share/mise/installs/jq/1.6/bin/jq"
+echo "echo 'fake jq 1.6 from cache restore'" >> "$HOME/.local/share/mise/installs/jq/1.6/bin/jq"
+chmod +x "$HOME/.local/share/mise/installs/jq/1.6/bin/jq"
+echo "✅ Fake cache restore complete - jq should be considered installed now"
+'''
+
+postinstall = '''
+echo "🟢 POSTINSTALL: This should NOT run if preinstall prevented actual installation"
+echo "📁 If you see this, mise downloaded and installed jq despite it being cached"
+'''

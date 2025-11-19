@@ -240,10 +240,14 @@ async fn execute_command(
             if *all {
                 handle_restore_all(cache_manager, *selective, *hook_mode).await?;
             } else if let (Some(tool), Some(version)) = (tool, version) {
-                let default_path = format!("~/.mise/installs/{}/{}", tool, version);
-                let install_path = path.as_deref().unwrap_or(&default_path);
-                handle_restore_single(cache_manager, tool, version, install_path, *hook_mode)
-                    .await?;
+                if let Some(install_path) = path {
+                    handle_restore_single(cache_manager, tool, version, install_path, *hook_mode)
+                        .await?;
+                } else {
+                    // Auto-determine install path for hooks
+                    handle_restore_single_auto_path(cache_manager, tool, version, *hook_mode)
+                        .await?;
+                }
             } else {
                 if !hook_mode {
                     return Err(anyhow::anyhow!(
@@ -362,6 +366,40 @@ async fn handle_check_single(
     }
 }
 
+async fn handle_restore_single_auto_path(
+    cache_manager: &CacheManager,
+    tool: &str,
+    version: &str,
+    hook_mode: bool,
+) -> Result<()> {
+    if !hook_mode {
+        info!("📦 Restoring {tool}@{version} from S3 cache (auto-path)");
+    }
+
+    let success = cache_manager
+        .restore_tool_from_cache(tool, version)
+        .await?;
+    if success {
+        if !hook_mode {
+            println!("✅ Restored {tool}@{version} from cache");
+        }
+        // In hook mode, exit with code 0 to indicate success
+        if hook_mode {
+            std::process::exit(0);
+        }
+    } else {
+        if !hook_mode {
+            error!("❌ Failed to restore {tool}@{version} from cache");
+        }
+        // In hook mode, exit with code 1 to indicate cache miss
+        if hook_mode {
+            std::process::exit(1);
+        }
+        return Err(anyhow::anyhow!("Restore failed"));
+    }
+    Ok(())
+}
+
 async fn handle_check_all(cache_manager: &CacheManager, hook_mode: bool) -> Result<()> {
     let tools = cache_manager.get_project_tools().await?;
     let mut all_cached = true;
@@ -403,9 +441,17 @@ async fn handle_restore_single(
         if !hook_mode {
             println!("✅ Restored {tool}@{version} from cache");
         }
+        // In hook mode, exit with code 0 to indicate success
+        if hook_mode {
+            std::process::exit(0);
+        }
     } else {
         if !hook_mode {
             error!("❌ Failed to restore {tool}@{version} from cache");
+        }
+        // In hook mode, exit with code 1 to indicate cache miss
+        if hook_mode {
+            std::process::exit(1);
         }
         return Err(anyhow::anyhow!("Restore failed"));
     }
